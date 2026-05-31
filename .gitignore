@@ -1,0 +1,40 @@
+# --- Secrets / local config ---
+.env
+.env.local
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Xcode / Swift ---
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+**/xcuserdata/
+*.swp
+*.moved-aside
+xcshareddata/IDEWorkspaceChecks.plist
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# --- Editors ---
+.vscode/
+.idea/
+*.iml
+
+# --- Misc ---
+*.log

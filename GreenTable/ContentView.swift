@@ -1,24 +1,33 @@
-//
-//  ContentView.swift
-//  GreenTable
-//
-//  Created by Aral Cay on 5/30/26.
-//
-
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject var authStore: AuthStore
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        if authStore.isAuthenticated {
+            TabView {
+                DashboardView()
+                    .tabItem {
+                        Label("Dashboard", systemImage: "house")
+                    }
+
+                FriendsView()
+                    .tabItem {
+                        Label("Friends", systemImage: "person.2")
+                    }
+
+                CreateSessionView()
+                    .tabItem {
+                        Label("Create", systemImage: "plus.circle")
+                    }
+            }
+        } else {
+            AuthView()
         }
-        .padding()
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(AuthStore())
 }
