@@ -104,6 +104,38 @@ def respond_request():
     return jsonify({"friendship_id": friendship_id, "status": status})
 
 
+@friends_bp.delete("/friends/<int:friendship_id>")
+@require_auth
+def remove_friend(friendship_id: int):
+    me = get_current_user()
+
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT friendship_id, requester_id, addressee_id, status FROM Friendships WHERE friendship_id = %s",
+            (friendship_id,),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return jsonify({"error": "friendship not found"}), 404
+
+    # Only someone involved in the friendship can remove it
+    if me["user_id"] not in (row["requester_id"], row["addressee_id"]):
+        return jsonify({"error": "you are not part of this friendship"}), 403
+
+    # For a pending request, only the requester can cancel it
+    if row["status"] == "pending" and row["requester_id"] != me["user_id"]:
+        return jsonify({"error": "only the sender can cancel a pending request"}), 403
+
+    with get_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM Friendships WHERE friendship_id = %s", (friendship_id,))
+
+    action = "cancel_friend_request" if row["status"] == "pending" else "remove_friend"
+    log_action(me["user_id"], None, action, f"friendship_id={friendship_id}")
+
+    return jsonify({"deleted": True, "friendship_id": friendship_id})
+
+
 @friends_bp.get("/friends")
 @require_auth
 def list_friends():

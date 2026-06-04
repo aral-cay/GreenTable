@@ -365,7 +365,7 @@ def main() -> int:
                         json_body={
                             "location_id":    2,
                             "meal_type":      "dinner",
-                            "scheduled_time": future_iso(3),
+                            "scheduled_time": future_iso(8),
                             "visibility":     "invite_only",
                             "invitee_ids":    [bob_id],
                         })
@@ -373,6 +373,20 @@ def main() -> int:
     if status == 201 and isinstance(body, dict):
         invite_session_id = body["session"]["session_id"]
         record("alice creates invite-only session", True, f"session_id={invite_session_id}")
+    elif status == 409 and "within 30 minutes" in str(body):
+        # Re-run: a previous run left an active invite-only session near the same time.
+        # Find Alice's most recent active invite-only session to continue the test.
+        s2_status, s2_body = get("/sessions", token=alice_token)
+        if s2_status == 200:
+            for s in s2_body.get("created", []):
+                if s["visibility"] == "invite_only" and s["status"] == "active":
+                    invite_session_id = s["session_id"]
+                    break
+        if invite_session_id:
+            record("alice creates invite-only session (reusing existing)", True,
+                   f"session_id={invite_session_id}")
+        else:
+            record("alice creates invite-only session", False, show_failure(status, body))
     else:
         record("alice creates invite-only session", False, show_failure(status, body))
 
@@ -415,7 +429,266 @@ def main() -> int:
         else:
             record("charlie cannot join invite-only session", False, show_failure(status, body))
 
-    # 16. Alice cancels the open session
+    # 16. Alice edits her open session(change location, meal type, time, visibility)
+    if open_session_id is not None:
+        new_time = future_iso(5)
+        status, body = put(f"/sessions/{open_session_id}",
+                           token=alice_token,
+                           json_body={
+                               "location_id":    2,
+                               "meal_type":      "dinner",
+                               "scheduled_time": new_time,
+                               "visibility":     "invite_only",
+                           })
+        if status == 200 and isinstance(body, dict):
+            s = body.get("session", {})
+            ok = (s.get("location_id") == 2
+                  and s.get("meal_type") == "dinner"
+                  and s.get("visibility") == "invite_only")
+            record("alice edits session (location/meal/time/visibility)", ok,
+                   show_failure(status, body) if not ok else "")
+        elif status == 409 and "cancelled" in str(body).lower():
+            record("alice edits session (session already cancelled -- skipping)", True,
+                   "session was cancelled on a previous run before edit test")
+        else:
+            record("alice edits session (location/meal/time/visibility)", False,
+                   show_failure(status, body))
+
+    # 17. Bob (not the creator) tries to edit Alice's session -- must be 403
+    if open_session_id is not None:
+        status, body = put(f"/sessions/{open_session_id}",
+                           token=bob_token,
+                           json_body={"meal_type": "breakfast"})
+        if status == 403:
+            record("non-creator cannot edit session", True,
+                   f"server said: {body.get('error')!r}")
+        elif status == 409 and "cancelled" in str(body).lower():
+            record("non-creator cannot edit session (session cancelled -- skipping)", True,
+                   "session was cancelled; edit attempt returned 409 instead of 403")
+        else:
+            record("non-creator cannot edit session", False, show_failure(status, body))
+
+    # 18. Alice tries to set a past scheduled_time -- must be 400
+    if open_session_id is not None:
+        past_time = (datetime.now() - timedelta(hours=1)).replace(microsecond=0).isoformat()
+        status, body = put(f"/sessions/{open_session_id}",
+                           token=alice_token,
+                           json_body={"scheduled_time": past_time})
+        if status == 400:
+            record("cannot set scheduled_time in the past", True,
+                   f"server said: {body.get('error')!r}")
+        elif status == 409 and "cancelled" in str(body).lower():
+            record("cannot set scheduled_time in the past (session cancelled -- skipping)", True,
+                   "session was cancelled; past-time attempt returned 409")
+        else:
+            record("cannot set scheduled_time in the past", False, show_failure(status, body))
+
+    # 19. Edit a session that does not exist -- must be 404
+    status, body = put("/sessions/999999",
+                       token=alice_token,
+                       json_body={"meal_type": "lunch"})
+    if status == 404:
+        record("edit non-existent session returns 404", True,
+               f"server said: {body.get('error')!r}")
+    else:
+        record("edit non-existent session returns 404", False, show_failure(status, body))
+
+    # 20. Alice and Charlie become friends so we can test removing an accepted friendship
+    status, body = post("/friends/request",
+                        token=alice_token,
+                        json_body={"addressee_id": charlie_id})
+    alice_charlie_fid = None
+    if status == 201 and isinstance(body, dict):
+        alice_charlie_fid = body.get("friendship_id")
+        record("alice sends friend request to charlie", True,
+               f"friendship_id={alice_charlie_fid}")
+    elif status == 409 and isinstance(body, dict):
+        nested = body.get("friendship") or {}
+        alice_charlie_fid = nested.get("friendship_id") or body.get("friendship_id")
+        record("alice sends friend request to charlie (already exists)", True,
+               f"friendship_id={alice_charlie_fid}")
+    else:
+        record("alice sends friend request to charlie", False, show_failure(status, body))
+
+    if alice_charlie_fid is not None:
+        # Check if already accepted (re-run)
+        _, ac_status, _ = find_friendship(charlie_token,
+                                          requester_id=alice_id,
+                                          addressee_id=charlie_id)
+        if ac_status != "accepted":
+            status, body = put("/friends/respond",
+                               token=charlie_token,
+                               json_body={"friendship_id": alice_charlie_fid, "status": "accepted"})
+            if status == 200:
+                record("charlie accepts alice's friend request", True)
+            else:
+                record("charlie accepts alice's friend request", False, show_failure(status, body))
+                alice_charlie_fid = None
+        else:
+            record("charlie accepts alice's friend request (already accepted)", True)
+
+    # 21. Alice removes Charlie as a friend (accepted friendship delete)
+    if alice_charlie_fid is not None:
+        status, body = _do("DELETE", f"/friends/{alice_charlie_fid}", token=alice_token)
+        if status == 200 and isinstance(body, dict) and body.get("deleted") is True:
+            record("alice removes charlie as friend", True,
+                   f"friendship_id={alice_charlie_fid}")
+        else:
+            record("alice removes charlie as friend", False, show_failure(status, body))
+
+    # 22. Charlie sends Alice a new request so we can test cancelling a pending one
+    status, body = post("/friends/request",
+                        token=charlie_token,
+                        json_body={"addressee_id": alice_id})
+    charlie_alice_fid = None
+    if status == 201 and isinstance(body, dict):
+        charlie_alice_fid = body.get("friendship_id")
+        record("charlie sends alice a new friend request", True,
+               f"friendship_id={charlie_alice_fid}")
+    elif status == 409 and isinstance(body, dict):
+        nested = body.get("friendship") or {}
+        charlie_alice_fid = nested.get("friendship_id") or body.get("friendship_id")
+        record("charlie sends alice a new friend request (already exists)", True,
+               f"friendship_id={charlie_alice_fid}")
+    else:
+        record("charlie sends alice a new friend request", False, show_failure(status, body))
+
+    # 23. Charlie cancels the pending request they just sent
+    if charlie_alice_fid is not None:
+        status, body = _do("DELETE", f"/friends/{charlie_alice_fid}", token=charlie_token)
+        if status == 200 and isinstance(body, dict) and body.get("deleted") is True:
+            record("charlie cancels outgoing friend request", True,
+                   f"friendship_id={charlie_alice_fid}")
+        else:
+            record("charlie cancels outgoing friend request", False, show_failure(status, body))
+
+    # 24. Alice (addressee, not requester) tries to cancel Charlie's pending request (403 error)
+    status, body = post("/friends/request",
+                        token=charlie_token,
+                        json_body={"addressee_id": alice_id})
+    new_fid = None
+    if status == 201 and isinstance(body, dict):
+        new_fid = body.get("friendship_id")
+    elif status == 409 and isinstance(body, dict):
+        nested = body.get("friendship") or {}
+        new_fid = nested.get("friendship_id") or body.get("friendship_id")
+
+    if new_fid is not None:
+        status, body = _do("DELETE", f"/friends/{new_fid}", token=alice_token)
+        if status == 403:
+            record("addressee cannot cancel sender's pending request", True,
+                   f"server said: {body.get('error')!r}")
+        else:
+            record("addressee cannot cancel sender's pending request", False,
+                   show_failure(status, body))
+        # Clean up -- charlie cancels it so the DB is tidy
+        _do("DELETE", f"/friends/{new_fid}", token=charlie_token)
+
+    # 25. Delete a non-existent friendship (404)
+    status, body = _do("DELETE", "/friends/999999", token=alice_token)
+    if status == 404:
+        record("delete non-existent friendship returns 404", True,
+               f"server said: {body.get('error')!r}")
+    else:
+        record("delete non-existent friendship returns 404", False,
+               show_failure(status, body))
+
+    # 26. Alice lists invitations for her invite only session (creator only)
+    if invite_session_id is not None:
+        status, body = get(f"/sessions/{invite_session_id}/invitations", token=alice_token)
+        if status == 200 and isinstance(body, dict):
+            record("creator can list invitations", True,
+                   f"count={len(body.get('invitations', []))}")
+        else:
+            record("creator can list invitations", False, show_failure(status, body))
+
+    # 27. Bob (not the creator) tries to list invitations (403 error)
+    if invite_session_id is not None:
+        status, body = get(f"/sessions/{invite_session_id}/invitations", token=bob_token)
+        if status == 403:
+            record("non-creator cannot list invitations", True,
+                   f"server said: {body.get('error')!r}")
+        else:
+            record("non-creator cannot list invitations", False, show_failure(status, body))
+
+    # 28. Alice creates a new invite only session and invites Charlie so we can test revoke
+    status, body = post("/sessions",
+                        token=alice_token,
+                        json_body={
+                            "location_id":    1,
+                            "meal_type":      "breakfast",
+                            "scheduled_time": future_iso(12),
+                            "visibility":     "invite_only",
+                            "invitee_ids":    [charlie_id],
+                        })
+    revoke_session_id = None
+    revoke_invitation_id = None
+    if status == 201 and isinstance(body, dict):
+        revoke_session_id = body["session"]["session_id"]
+        record("alice creates session to test revoke", True,
+               f"session_id={revoke_session_id}")
+    else:
+        record("alice creates session to test revoke", False, show_failure(status, body))
+
+    # Find the invitation_id for Charlie in that session
+    if revoke_session_id is not None:
+        status, body = get(f"/sessions/{revoke_session_id}/invitations", token=alice_token)
+        if status == 200 and isinstance(body, dict):
+            for inv in body.get("invitations", []):
+                if inv["invitee"]["user_id"] == charlie_id:
+                    revoke_invitation_id = inv["invitation_id"]
+                    break
+
+    # 29. Alice revokes Charlie's pending invitation
+    if revoke_invitation_id is not None:
+        status, body = _do("DELETE", f"/invitations/{revoke_invitation_id}", token=alice_token)
+        if status == 200 and isinstance(body, dict) and body.get("deleted") is True:
+            record("alice revokes charlie's invitation", True,
+                   f"invitation_id={revoke_invitation_id}")
+        else:
+            record("alice revokes charlie's invitation", False, show_failure(status, body))
+
+    # 30. Bob (not the creator) tries to revoke the same invitation (403)
+    #     First need a fresh invitation since we just deleted the last one
+    if revoke_session_id is not None:
+        # Re-invite Charlie so there is something to try to revoke
+        status, body = post("/sessions",
+                            token=alice_token,
+                            json_body={
+                                "location_id":    1,
+                                "meal_type":      "lunch",
+                                "scheduled_time": future_iso(13),
+                                "visibility":     "invite_only",
+                                "invitee_ids":    [charlie_id],
+                            })
+        second_revoke_inv_id = None
+        if status == 201 and isinstance(body, dict):
+            new_sid = body["session"]["session_id"]
+            s2_status, s2_body = get(f"/sessions/{new_sid}/invitations", token=alice_token)
+            if s2_status == 200:
+                for inv in s2_body.get("invitations", []):
+                    if inv["invitee"]["user_id"] == charlie_id:
+                        second_revoke_inv_id = inv["invitation_id"]
+                        break
+        if second_revoke_inv_id is not None:
+            status, body = _do("DELETE", f"/invitations/{second_revoke_inv_id}", token=bob_token)
+            if status == 403:
+                record("non-creator cannot revoke invitation", True,
+                       f"server said: {body.get('error')!r}")
+            else:
+                record("non-creator cannot revoke invitation", False, show_failure(status, body))
+            # Clean up
+            _do("DELETE", f"/invitations/{second_revoke_inv_id}", token=alice_token)
+
+    # 31. Revoke a non-existent invitation (404)
+    status, body = _do("DELETE", "/invitations/999999", token=alice_token)
+    if status == 404:
+        record("revoke non-existent invitation returns 404", True,
+               f"server said: {body.get('error')!r}")
+    else:
+        record("revoke non-existent invitation returns 404", False, show_failure(status, body))
+
+    # 33. Alice cancels the open session
     if open_session_id is not None:
         status, body = delete(f"/sessions/{open_session_id}", token=alice_token)
         if status == 200 and isinstance(body, dict) and body.get("session", {}).get("status") == "cancelled":

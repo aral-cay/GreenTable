@@ -96,6 +96,7 @@ struct SessionRow: View {
     @State private var rowError: String?
     @State private var showDeleteConfirm = false
     @State private var showLeaveConfirm = false
+    @State private var showEditSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -142,6 +143,9 @@ struct SessionRow: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(busy)
                 } else if session.viewer_role == "creator" && session.status == "active" {
+                    Button("Edit") { showEditSheet = true }
+                        .buttonStyle(.bordered)
+                        .disabled(busy)
                     Button(role: .destructive) { cancel() } label: { Text("Cancel session") }
                         .buttonStyle(.bordered)
                         .disabled(busy)
@@ -177,6 +181,9 @@ struct SessionRow: View {
         ) {
             Button("Leave", role: .destructive) { leave() }
             Button("Stay", role: .cancel) {}
+        }
+        .sheet(isPresented: $showEditSheet) {
+            EditSessionView(session: session, onSave: onAction)
         }
     }
 

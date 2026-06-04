@@ -88,6 +88,21 @@ struct SessionWrapper: Codable {
     let session: MealSession
 }
 
+// MARK: - Invitations
+
+// Represents one invitation row returned by GET /sessions/{id}/invitations
+struct Invitation: Codable, Identifiable {
+    let invitation_id: Int
+    let status: String       // "pending", "accepted", or "declined"
+    let invitee: User
+
+    var id: Int { invitation_id }
+}
+
+struct InvitationsResponse: Codable {
+    let invitations: [Invitation]
+}
+
 // MARK: - Errors
 
 struct APIError: Codable, Error, LocalizedError {

@@ -54,9 +54,16 @@ struct FriendsView: View {
                 Section("Friends") {
                     if let friends = data?.friends, !friends.isEmpty {
                         ForEach(friends) { f in
-                            VStack(alignment: .leading) {
-                                Text(f.user.name)
-                                Text(f.user.email).font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(f.user.name)
+                                    Text(f.user.email).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Remove") { removeFriend(f.friendship_id) }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .tint(.red)
                             }
                         }
                     } else {
@@ -67,9 +74,15 @@ struct FriendsView: View {
                 if let outgoing = data?.outgoing_requests, !outgoing.isEmpty {
                     Section("Pending (sent)") {
                         ForEach(outgoing) { f in
-                            VStack(alignment: .leading) {
-                                Text(f.user.name)
-                                Text(f.user.email).font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(f.user.name)
+                                    Text(f.user.email).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Cancel") { removeFriend(f.friendship_id) }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                             }
                         }
                     }
@@ -115,6 +128,15 @@ struct FriendsView: View {
         Task {
             do {
                 try await APIClient.shared.respondFriendship(id: id, status: status)
+                await refresh()
+            } catch { errorText = errorMsg(error) }
+        }
+    }
+
+    private func removeFriend(_ id: Int) {
+        Task {
+            do {
+                try await APIClient.shared.removeFriend(id: id)
                 await refresh()
             } catch { errorText = errorMsg(error) }
         }

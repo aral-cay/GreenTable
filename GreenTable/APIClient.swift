@@ -3,7 +3,6 @@ import Foundation
 /// Lightweight async REST client for the GreenTable backend.
 final class APIClient {
     static let shared = APIClient()
-
     /// Update this to point at your Flask server.
     /// - iOS Simulator can reach `http://127.0.0.1:5050`.
     /// - On a physical device, replace with your Mac's LAN IP.
@@ -61,7 +60,7 @@ final class APIClient {
         }
         return try decoder.decode(T.self, from: data)
     }
-
+    
     // MARK: Auth
 
     func register(name: String, email: String, password: String) async throws -> User {
@@ -109,6 +108,13 @@ final class APIClient {
             "/friends/respond",
             method: .PUT,
             body: ["friendship_id": id, "status": status]
+        )
+    }
+
+    func removeFriend(id: Int) async throws {
+        let _: EmptyResponse = try await request(
+            "/friends/\(id)",
+            method: .DELETE
         )
     }
 
@@ -187,6 +193,20 @@ final class APIClient {
             body: fields
         )
         return resp.session
+    }
+
+    // Returns all invitations for a session (creator only)
+    func listInvitations(sessionId: Int) async throws -> [Invitation] {
+        let resp: InvitationsResponse = try await request("/sessions/\(sessionId)/invitations")
+        return resp.invitations
+    }
+
+    // Deletes a pending invitation (creator only)
+    func revokeInvitation(id: Int) async throws {
+        let _: EmptyResponse = try await request(
+            "/invitations/\(id)",
+            method: .DELETE
+        )
     }
 
     func respondInvitation(id: Int, status: String) async throws {
